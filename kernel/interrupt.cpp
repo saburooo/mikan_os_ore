@@ -30,8 +30,6 @@ void NotifyEndOfInterrupt() {
 }
 
 namespace {
-  std::deque<Message>* msg_queue;
-
   __attribute__((interrupt))
   void IntHandlerXHCI(InterruptFrame* frame) {
     task_manager->SendMessage(1, Message{Message::kInterruptXHCI});
@@ -41,13 +39,10 @@ namespace {
   __attribute__((interrupt))
   void IntHandlerLAPICTimer(InterruptFrame* frame) {
     LAPICTimerOnInterrupt();
-    NotifyEndOfInterrupt();
   } 
 }
 
-void InitializeInterrupt(std::deque<Message>* msg_queue) {
-  ::msg_queue = msg_queue;
-
+void InitializeInterrupt() {
   SetIDTEntry(idt[InterruptVector::kXHCI],
               MakeIDTAttr(DescriptorType::kInterruptGate, 0),
               reinterpret_cast<uint64_t>(IntHandlerXHCI),
