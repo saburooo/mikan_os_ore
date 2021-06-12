@@ -12,6 +12,7 @@
 
 #include "graphics.hpp"
 #include "window.hpp"
+#include "message.hpp"
 
 /** @brief Layer は 1 つの層を表す。
  *
@@ -46,8 +47,8 @@ class Layer {
 
  private:
   unsigned int id_;
-  Vector2D<int> pos_;
-  std::shared_ptr<Window> window_;
+  Vector2D<int> pos_{};
+  std::shared_ptr<Window> window_{};
   bool draggable_{false};
 };
 
@@ -66,6 +67,7 @@ class LayerManager {
   void Draw(const Rectangle<int>& area) const;
   /** @brief 指定したレイヤーに設定されているウィンドウの描画領域内を再描画する。 */
   void Draw(unsigned int id) const;
+  void Draw(unsigned int id, Rectangle<int> area) const;
 
   /** @brief レイヤーの位置情報を指定された絶対座標へと更新する。再描画する。 */
   void Move(unsigned int id, Vector2D<int> new_pos);
@@ -84,19 +86,48 @@ class LayerManager {
 
   /** @brief 指定された座標にウィンドウを持つ最も上に表示されているレイヤーを探す。 */
   Layer* FindLayerByPosition(Vector2D<int> pos, unsigned int exclude_id) const;
+  Layer* FindLayer(unsigned int id);
+  int GetHeight(unsigned int id);
 
-// #@@range_begin(layermgr_fields)
  private:
   FrameBuffer* screen_{nullptr};
   mutable FrameBuffer back_buffer_{};
-// #@@range_end(layermgr_fields)
   std::vector<std::unique_ptr<Layer>> layers_{};
   std::vector<Layer*> layer_stack_{};
   unsigned int latest_id_{0};
 
-  Layer* FindLayer(unsigned int id);
 };
 
 extern LayerManager* layer_manager;
 
+class ActiveLayer {
+  public:
+    ActiveLayer(LayerManager& manager);
+    void SetMouseLayer(unsigned int mouse_layer);
+    void Activate(unsigned int layer_id);
+    unsigned int GetActive() const { return active_layer_; }
+
+  private:
+    LayerManager& manager_;
+    unsigned int active_layer_{0};
+    unsigned int mouse_layer_{0};
+};
+
+extern ActiveLayer* active_layer;
+
 void InitializeLayer();
+void ProcessLayerMessage(const Message& msg);
+
+constexpr Message MakeLayerMessage(
+    uint64_t task_id, unsigned int layer_id,
+    LayerOperation op, const Rectangle<int>& area) {
+
+  Message msg{Message::kLayer, task_id};
+  msg.arg.layer.layer_id = layer_id;
+  msg.arg.layer.op = op;
+  msg.arg.layer.x = area.pos.x;
+  msg.arg.layer.y = area.pos.y;
+  msg.arg.layer.w = area.size.x;
+  msg.arg.layer.h = area.size.y;
+  return msg;
+}
