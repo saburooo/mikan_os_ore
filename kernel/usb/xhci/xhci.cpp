@@ -539,9 +539,7 @@ namespace usb::xhci {
 
         if (0x8086 == pci::ReadVendorId(*xhc_dev)) {
           break;
-        } else {
-          Log(kError, "xHC has nullptr\n");
-        }
+        } 
       }
     }
 
