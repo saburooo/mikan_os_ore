@@ -35,12 +35,34 @@ Rectangle<int> Terminal::BlinkCursor() {
 }
 
 void Terminal::DrawCursor(bool visible) {
-    const auto color = visible ? ToColor(0xffffff) : ToColor(0x606060);
+    const auto color = visible ? ToColor(0xffffff) : ToColor(0);
     FillRectangle(*window_->Writer(), CalcCursorPos(), {7, 15}, color);
 }
 
 Vector2D<int> Terminal::CalcCursorPos() const {
     return ToplevelWindow::kTopLeftMargin + Vector2D<int>{4 + 8 * cursor_.x, 4 + 16 * cursor_.y};
+}
+
+void Terminal::ExecuteFile(const fat::DirectoryEntry& file_entry){
+    auto cluster = file_entry.FirstCluster();
+    auto remain_bytes = file_entry.file_size;
+    
+    std::vector<uint8_t> file_buf(remain_bytes);
+    auto p = &file_buf[0];
+
+    while(cluster != 0 && cluster != fat::kEndOfClusterchain) {
+        const auto copy_bytes = fat::bytes_per_cluster < remain_bytes ?
+            fat::bytes_per_cluster : remain_bytes;
+        memcpy(p, fat::GetSectorByCluster<uint8_t>(cluster), copy_bytes);
+
+        remain_bytes -= copy_bytes;
+        p += copy_bytes;
+        cluster = fat::NextCluster(cluster);
+    }
+
+    using Func = void();
+    auto f = reinterpret_cast<Func*>(&file_buf[0]);
+    f();
 }
 
 void Terminal::ExecuteLine() {
@@ -51,6 +73,7 @@ void Terminal::ExecuteLine() {
         *first_arg = 0;
         ++first_arg;
     }
+    // TODO なんかコマンド作る
     if (strcmp(command, "echo") == 0)
     {
         if (first_arg)
@@ -60,7 +83,7 @@ void Terminal::ExecuteLine() {
         Print("\n");
     } else if (strcmp(command, "clear") == 0) {
         FillRectangle(*window_->InnerWriter(),
-                    {4, 4}, {8*kColumns, 16*kRows}, ToColor(0x606060));
+                    {4, 4}, {8*kColumns, 16*kRows}, ToColor(0x36343B));
         cursor_.y = 0;
 
     } else if (strcmp(command, "lspci") == 0) {
@@ -70,7 +93,8 @@ void Terminal::ExecuteLine() {
             const auto& dev = pci::devices[i];
             auto vendor_id = pci::ReadVendorId(dev.bus, dev.device, dev.function);
             sprintf(s, "%02x:%02x.%d vend=%04x head=%02x class=%02x.%02x.%02x\n",
-                dev.bus, dev.device, dev.function, vendor_id, dev.class_code.interface);
+                dev.bus, dev.device, dev.function, vendor_id, dev.header_type,
+                dev.class_code.base, dev.class_code.sub, dev.class_code.interface);
             Print(s);
         }
         
@@ -78,15 +102,13 @@ void Terminal::ExecuteLine() {
         auto root_dir_entries = fat::GetSectorByCluster<fat::DirectoryEntry>(
             fat::boot_volume_image->root_cluster);
         auto entries_per_cluster =
-            fat::boot_volume_image->bytes_per_sector / sizeof(fat::DirectoryEntry)
-            * fat::boot_volume_image->sectors_per_cluster;
+            fat::bytes_per_cluster / sizeof(fat::DirectoryEntry);
         char base[9], ext[4];
         char s[64];
         for (int i = 0; i < entries_per_cluster; ++i)
         {
             ReadName(root_dir_entries[i], base, ext);
-            if (base[0] == 0x00)
-            {
+            if (base[0] == 0x00) {
                 break;
             } else if (static_cast<uint8_t>(base[0]) == 0xe5) {
                 continue;
@@ -102,10 +124,42 @@ void Terminal::ExecuteLine() {
             Print(s);
         }
 
+    } else if (strcmp(command, "cat") == 0){
+        char s[64];
+
+        auto file_entry = fat::FildFile(first_arg);
+        if(!file_entry){
+            sprintf(s, "no such file: %s\n", first_arg);
+            Print(s);
+        } else {
+            auto cluster = file_entry->FirstCluster();
+            auto remain_bytes = file_entry->file_size;
+
+            DrawCursor(false);
+            while(cluster != 0 && cluster != fat::kEndOfClusterchain) {
+                char* p = fat::GetSectorByCluster<char>(cluster);
+
+                int i = 0;
+                for(; i < fat::bytes_per_cluster && i < remain_bytes; ++i){
+                    Print(*p);
+                    ++p;
+                }
+                remain_bytes -= i;
+                cluster = fat::NextCluster(cluster);
+            }
+            DrawCursor(true);
+        }
+    } else if(strcmp(command, "hoge") == 0){
+        Print("hogeeeeeeeeeee\n");
     } else if (command[0] != 0) {
-        Print("no such command: ");
-        Print(command);
-        Print("\n");
+        auto file_entry = fat::FildFile(command);
+        if(!file_entry) {
+            Print("no such command: ");
+            Print(command);
+            Print("\n");
+        } else {
+            ExecuteFile(*file_entry);
+        }
     } 
 }
 
@@ -114,7 +168,6 @@ Rectangle<int> Terminal::InputKey(uint8_t modifier, uint8_t keycode, char ascii)
 
     Rectangle<int> draw_area{CalcCursorPos(), {8*2, 16}};
 
-    // TODO なんかコマンド作る
     if (ascii == '\n') {
         linebuf_[linebuf_index_] = 0;
         if (linebuf_index_ > 0) {
@@ -123,7 +176,8 @@ Rectangle<int> Terminal::InputKey(uint8_t modifier, uint8_t keycode, char ascii)
         }
         linebuf_index_ = 0;
         cmd_history_index_ = -1;
-        Log(kWarn, "line: %s\n", &linebuf_[0]);
+
+        cursor_.x = 0;
         if (cursor_.y < kRows - 1)
         {
             ++cursor_.y;
@@ -174,7 +228,7 @@ Rectangle<int> Terminal::HistoryUpDown(int direction) {
     const auto first_pos = CalcCursorPos();
 
     Rectangle<int> draw_area{first_pos, {8*(kColumns - 1), 16}};
-    FillRectangle(*window_->Writer(), draw_area.pos, draw_area.size, ToColor(0x606060));
+    FillRectangle(*window_->Writer(), draw_area.pos, draw_area.size, ToColor(0x36343B));
 
     const char* history = "";
     if (cmd_history_index_ >= 0) {
@@ -189,34 +243,36 @@ Rectangle<int> Terminal::HistoryUpDown(int direction) {
     return draw_area;
 }
 
-void Terminal::Print(const char* s) {
-    DrawCursor(false);
-
+void Terminal::Print(char c) {
     auto newline = [this]() {
         cursor_.x = 0;
-        if (cursor_.y < kRows - 1)
-        {
+        if(cursor_.y < kRows - 1) {
             ++cursor_.y;
         } else {
             Scroll1();
         }
     };
 
-    while (*s) {
-        if(*s == '\n') {
+    if(c == '\n') {
+        newline();
+    } else {
+        WriteAscii(*window_->Writer(), CalcCursorPos(), c, {255, 255, 255});
+        if(cursor_.x == kColumns - 1) {
             newline();
-        } else {
-            WriteAscii(*window_->Writer(), CalcCursorPos(), *s, {255, 255, 255});
-            if (cursor_.x == kColumns - 1)
-            {
-                newline();
-            } else {
-                ++cursor_.x;
-            }
+        }else {
+            ++cursor_.x;
         }
+    }
+}
 
+void Terminal::Print(const char* s) {
+    DrawCursor(false);
+
+    while(*s){
+        Print(*s);
         ++s;
     }
+
     DrawCursor(true);
 }
 
@@ -227,7 +283,7 @@ void Terminal::Scroll1() {
     };
     window_->Move(ToplevelWindow::kTopLeftMargin + Vector2D<int>{4, 4}, move_src);
     FillRectangle(*window_->InnerWriter(),
-                    {4, 4 + 16*cursor_.y}, {8*kColumns, 16}, ToColor(0x606060));
+                    {4, 4 + 16*cursor_.y}, {8*kColumns, 16}, ToColor(0x36343B));
 }
 
 void TaskTerminal(uint64_t task_id, int64_t data) {
@@ -238,6 +294,7 @@ void TaskTerminal(uint64_t task_id, int64_t data) {
     active_layer->Activate(terminal->LayerID());
     layer_task_map->insert(std::make_pair(terminal->LayerID(), task_id));
     __asm__("sti");
+
     while (true)
     {
         __asm__("cli");
@@ -247,6 +304,7 @@ void TaskTerminal(uint64_t task_id, int64_t data) {
             __asm__("sti");
             continue;
         }
+        __asm__("sti");
 
         switch (msg->type) {
 

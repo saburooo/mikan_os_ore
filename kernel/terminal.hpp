@@ -1,3 +1,4 @@
+#include "fat.hpp"
 #include "window.hpp"
 #include <deque>
 
@@ -13,7 +14,9 @@ class Terminal {
         Rectangle<int> InputKey(uint8_t modifier, uint8_t keycode, char ascii);
 
         void Print(const char* s);
+        void Print(char c);
         void ExecuteLine();
+        void ExecuteFile(const fat::DirectoryEntry& file_entry);
 
         std::deque<std::array<char, kLineMax>> cmd_history_{};
         int cmd_history_index_{-1};
